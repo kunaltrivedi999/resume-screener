@@ -1,437 +1,240 @@
-from flask import Flask, render_template, request
-import re
-import pickle
+# File: app.py (REFACTORED — replaces your current app.py)
+
+"""
+Resume Screening Dashboard — Flask Application
+
+Architecture:
+    GET  /              → Web UI (form + results)
+    POST /              → Process form submission
+    POST /api/v1/match  → Headless JSON API
+    GET  /health        → Health check
+
+Scoring Pipeline:
+    1. Extract skills from both texts (word-boundary matching)
+    2. Compute TF-IDF cosine similarity between documents
+    3. Blend into composite score: (skill × 0.55) + (cosine × 0.45)
+    4. ML model predicts resume category with confidence
+    5. Generate career path recommendations
+"""
+
+import json
 import os
+import pickle
+import logging
+
+from flask import Flask, render_template, request, jsonify
+
+from matching_engine import (
+    extract_skills,
+    calculate_skill_match,
+    calculate_composite_score,
+    extract_experience,
+    extract_experience_from_jd,
+    calculate_experience_score,
+    estimate_salary_range,
+    extract_education,
+    SimilarityEngine,
+    SKILL_DATABASE,
+)
+
+# ============================================================
+# APP SETUP
+# ============================================================
 
 app = Flask(__name__)
+app.config['MAX_CONTENT_LENGTH'] = 1 * 1024 * 1024  # 1MB max
 
-# ============================================
-# SECTION 1: LOAD ML MODEL
-# ============================================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
+
+# ============================================================
+# LOAD ML MODEL + METRICS (once at startup)
+# ============================================================
 
 model = None
 tfidf = None
+model_metrics = {}
 
 try:
     if os.path.exists("model.pkl") and os.path.exists("tfidf.pkl"):
-        with open("model.pkl", "rb") as model_file:
-            model = pickle.load(model_file)
-        with open("tfidf.pkl", "rb") as tfidf_file:
-            tfidf = pickle.load(tfidf_file)
-        print("ML model loaded successfully.")
+        with open("model.pkl", "rb") as f:
+            model = pickle.load(f)
+        with open("tfidf.pkl", "rb") as f:
+            tfidf = pickle.load(f)
+        logger.info("ML model loaded successfully.")
     else:
-        print("model.pkl or tfidf.pkl not found. Running without ML prediction.")
+        logger.warning("model.pkl or tfidf.pkl not found. Running without ML.")
 except Exception as e:
-    print(f"Error loading ML model: {e}")
+    logger.error(f"Error loading ML model: {e}")
 
+try:
+    if os.path.exists("model_metrics.json"):
+        with open("model_metrics.json", "r") as f:
+            model_metrics = json.load(f)
+        logger.info(f"Model metrics loaded: {model_metrics.get('accuracy', '?')}% accuracy")
+except Exception as e:
+    logger.error(f"Error loading metrics: {e}")
 
-# ============================================
-# SECTION 2: SKILL DATABASE
-# ============================================
+# Initialize similarity engine once
+similarity_engine = SimilarityEngine()
 
-SKILL_DATABASE = {
-    'programming_languages': {
-        'skills': [
-            'python', 'java', 'javascript', 'typescript',
-            'c++', 'c#', 'go', 'rust', 'ruby', 'php',
-            'swift', 'kotlin', 'r', 'scala', 'sql',
-            'html', 'css'
-        ],
-        'weight': 3
-    },
-    'web_frameworks': {
-        'skills': [
-            'flask', 'django', 'react', 'angular', 'vue',
-            'nextjs', 'express', 'spring', 'fastapi',
-            'bootstrap', 'tailwind', 'jquery', 'nodejs',
-            'laravel', 'dotnet'
-        ],
-        'weight': 3
-    },
-    'databases': {
-        'skills': [
-            'mysql', 'postgresql', 'mongodb', 'redis',
-            'sqlite', 'firebase', 'oracle', 'cassandra',
-            'dynamodb', 'elasticsearch'
-        ],
-        'weight': 2
-    },
-    'devops_cloud': {
-        'skills': [
-            'docker', 'kubernetes', 'aws', 'azure', 'gcp',
-            'linux', 'jenkins', 'terraform', 'nginx',
-            'ci/cd', 'github actions', 'heroku', 'vercel'
-        ],
-        'weight': 2
-    },
-    'ai_ml': {
-        'skills': [
-            'machine learning', 'deep learning', 'nlp',
-            'tensorflow', 'pytorch', 'pandas', 'numpy',
-            'scikit-learn', 'opencv', 'keras',
-            'data science', 'neural network'
-        ],
-        'weight': 2
-    },
-    'tools': {
-        'skills': [
-            'git', 'github', 'gitlab', 'postman', 'jira',
-            'figma', 'vs code', 'vim', 'webpack', 'babel',
-            'npm', 'pip', 'conda', 'excel', 'tableau', 'power bi'
-        ],
-        'weight': 1
-    },
-    'concepts': {
-        'skills': [
-            'rest api', 'graphql', 'microservices', 'agile',
-            'scrum', 'testing', 'unit testing', 'tdd',
-            'oop', 'design patterns', 'data structures',
-            'algorithms', 'system design', 'mvc'
-        ],
-        'weight': 2
-    }
-}
-
-
-# ============================================
-# SECTION 3: CAREER PATHS
-# ============================================
+# ============================================================
+# CAREER PATHS (domain knowledge)
+# ============================================================
 
 CAREER_PATHS = {
     'Backend Developer': {
         'required': ['python', 'sql', 'git', 'rest api'],
-        'good_to_have': [
-            'flask', 'django', 'docker', 'postgresql',
-            'redis', 'linux', 'aws'
-        ],
+        'good_to_have': ['flask', 'django', 'docker', 'postgresql', 'redis', 'linux', 'aws'],
         'salary_range': '₹20,000 - ₹40,000',
         'demand': 'Very High',
-        'description': 'Build server-side logic and APIs'
     },
     'Frontend Developer': {
-        'required': [
-            'html', 'css', 'javascript', 'react', 'git'
-        ],
-        'good_to_have': [
-            'typescript', 'nextjs', 'tailwind', 'vue',
-            'angular', 'figma', 'webpack'
-        ],
+        'required': ['html', 'css', 'javascript', 'react', 'git'],
+        'good_to_have': ['typescript', 'nextjs', 'tailwind', 'vue', 'angular', 'figma', 'webpack'],
         'salary_range': '₹18,000 - ₹35,000',
         'demand': 'Very High',
-        'description': 'Build user interfaces and web pages'
     },
     'Full Stack Developer': {
-        'required': [
-            'python', 'javascript', 'sql', 'html',
-            'css', 'git', 'rest api'
-        ],
-        'good_to_have': [
-            'react', 'flask', 'django', 'mongodb',
-            'docker', 'aws', 'nodejs'
-        ],
+        'required': ['python', 'javascript', 'sql', 'html', 'css', 'git', 'rest api'],
+        'good_to_have': ['react', 'flask', 'django', 'mongodb', 'docker', 'aws', 'nodejs'],
         'salary_range': '₹25,000 - ₹50,000',
         'demand': 'High',
-        'description': 'Build complete web applications'
     },
     'Data Analyst': {
         'required': ['python', 'sql', 'pandas', 'excel'],
-        'good_to_have': [
-            'numpy', 'data science', 'machine learning',
-            'tableau', 'power bi', 'r'
-        ],
+        'good_to_have': ['numpy', 'data science', 'machine learning', 'tableau', 'power bi', 'r'],
         'salary_range': '₹20,000 - ₹45,000',
         'demand': 'High',
-        'description': 'Analyze data and generate insights'
     },
     'AI/ML Engineer': {
-        'required': [
-            'python', 'machine learning', 'pandas',
-            'numpy', 'scikit-learn'
-        ],
-        'good_to_have': [
-            'deep learning', 'tensorflow', 'pytorch',
-            'nlp', 'opencv', 'docker', 'aws',
-            'neural network'
-        ],
+        'required': ['python', 'machine learning', 'pandas', 'numpy', 'scikit-learn'],
+        'good_to_have': ['deep learning', 'tensorflow', 'pytorch', 'nlp', 'opencv', 'docker', 'aws'],
         'salary_range': '₹30,000 - ₹60,000',
         'demand': 'Growing',
-        'description': 'Build AI and ML models'
     },
     'DevOps Engineer': {
-        'required': [
-            'linux', 'docker', 'git', 'ci/cd', 'aws'
-        ],
-        'good_to_have': [
-            'kubernetes', 'terraform', 'jenkins',
-            'azure', 'python', 'nginx',
-            'github actions'
-        ],
+        'required': ['linux', 'docker', 'git', 'ci/cd', 'aws'],
+        'good_to_have': ['kubernetes', 'terraform', 'jenkins', 'azure', 'python', 'nginx'],
         'salary_range': '₹25,000 - ₹55,000',
         'demand': 'High',
-        'description': 'Manage deployment and infrastructure'
     },
     'QA/Testing Engineer': {
-        'required': [
-            'testing', 'python', 'sql', 'git'
-        ],
-        'good_to_have': [
-            'unit testing', 'agile', 'jira',
-            'selenium', 'postman', 'rest api',
-            'ci/cd'
-        ],
+        'required': ['testing', 'python', 'sql', 'git'],
+        'good_to_have': ['unit testing', 'agile', 'jira', 'postman', 'rest api', 'ci/cd'],
         'salary_range': '₹18,000 - ₹35,000',
         'demand': 'High',
-        'description': 'Test software and ensure quality'
-    }
+    },
 }
 
 
-# ============================================
-# SECTION 4: TEXT CLEANING
-# ============================================
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
-def clean_text_logic(text):
-    """Clean text for rule-based logic."""
-    text = str(text).lower()
-    text = re.sub(r'[^a-z0-9\s/#+.]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-
-def clean_text_ml(text):
-    """Clean text for ML model."""
-    text = str(text).lower()
-    text = re.sub(r'[^a-z ]', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
-
-
-# ============================================
-# SECTION 5: ML PREDICTION
-# ============================================
-
-def predict_resume_category(resume_text):
-    """Predict resume category using trained ML model."""
+def predict_resume_category(resume_text: str) -> dict:
+    """
+    Predict resume category with confidence and top alternatives.
+    """
     if model is None or tfidf is None:
-        return "ML Model Not Loaded"
+        return {
+            'category': 'ML Model Not Loaded',
+            'confidence': 0,
+            'confidence_percent': 0,
+            'model_accuracy': model_metrics.get('accuracy', 0),
+            'top_3': [],
+        }
 
     try:
-        cleaned_resume = clean_text_ml(resume_text)
-        vectorized_resume = tfidf.transform([cleaned_resume])
-        prediction = model.predict(vectorized_resume)[0]
-        return prediction
+        import re as _re
+        import numpy as np
+        cleaned = _re.sub(r'[^a-z ]', ' ', resume_text.lower())
+        cleaned = _re.sub(r'\s+', ' ', cleaned).strip()
+
+        vectorized = tfidf.transform([cleaned])
+        prediction = model.predict(vectorized)[0]
+
+        confidence = 0
+        top_3 = []
+
+        if hasattr(model, 'predict_proba'):
+            probas = model.predict_proba(vectorized)[0]
+            confidence = float(max(probas))
+            classes = model.classes_
+            top_indices = probas.argsort()[-3:][::-1]
+            top_3 = [
+                {
+                    'category': str(classes[i]),
+                    'confidence': round(float(probas[i]) * 100, 1)
+                }
+                for i in top_indices
+                if float(probas[i]) > 0.01
+            ]
+        elif hasattr(model, 'decision_function'):
+            decisions = model.decision_function(vectorized)[0]
+            if hasattr(decisions, '__len__'):
+                exp_d = np.exp(decisions - np.max(decisions))
+                pseudo_probs = exp_d / exp_d.sum()
+                confidence = float(np.max(pseudo_probs))
+                classes = model.classes_
+                top_indices = pseudo_probs.argsort()[-3:][::-1]
+                top_3 = [
+                    {
+                        'category': str(classes[i]),
+                        'confidence': round(float(pseudo_probs[i]) * 100, 1)
+                    }
+                    for i in top_indices
+                    if float(pseudo_probs[i]) > 0.01
+                ]
+            else:
+                confidence = 0.5
+
+        return {
+            'category': str(prediction),
+            'confidence': round(confidence, 3),
+            'confidence_percent': round(confidence * 100),
+            'model_accuracy': model_metrics.get('accuracy', 0),
+            'top_3': top_3,
+        }
     except Exception as e:
-        print(f"Prediction error: {e}")
-        return "Prediction Error"
+        logger.error(f"Prediction error: {e}")
+        return {
+            'category': 'Prediction Error',
+            'confidence': 0,
+            'confidence_percent': 0,
+            'model_accuracy': model_metrics.get('accuracy', 0),
+            'top_3': [],
+        }
 
-
-# ============================================
-# SECTION 6: SKILL EXTRACTION
-# ============================================
-
-def extract_skills(text):
-    """Extract all skills found in text."""
-    text_lower = clean_text_logic(text)
-    found_skills = {}
-    all_found = []
-
-    for category, data in SKILL_DATABASE.items():
-        category_found = []
-
-        for skill in data['skills']:
-            if skill in text_lower:
-                category_found.append(skill)
-                all_found.append(skill)
-            elif skill == 'javascript' and 'js' in text_lower.split():
-                category_found.append(skill)
-                all_found.append(skill)
-            elif skill == 'typescript' and 'ts' in text_lower.split():
-                category_found.append(skill)
-                all_found.append(skill)
-            elif skill == 'machine learning' and 'ml' in text_lower.split():
-                category_found.append(skill)
-                all_found.append(skill)
-            elif skill == 'nodejs' and ('node' in text_lower.split() or 'node.js' in text_lower):
-                category_found.append(skill)
-                all_found.append(skill)
-
-        if category_found:
-            found_skills[category] = category_found
-
-    return found_skills, list(set(all_found))
-
-
-def extract_experience(text):
-    """Detect years of experience from text."""
-    text_lower = text.lower()
-
-    patterns = [
-        r'(\d+)\+?\s*years?\s*(?:of)?\s*experience',
-        r'experience\s*[:\-]?\s*(\d+)\s*years?',
-        r'(\d+)\+?\s*years?\s*(?:of)?\s*(?:work|industry)',
-        r'(\d+)\+?\s*yrs?\s*(?:of)?\s*exp',
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, text_lower)
-        if match:
-            return int(match.group(1))
-
-    fresher_keywords = [
-        'fresher', 'fresh graduate', 'entry level',
-        'no experience', 'seeking first',
-        'recent graduate', 'just graduated'
-    ]
-    for keyword in fresher_keywords:
-        if keyword in text_lower:
-            return 0
-
-    return -1
-
-
-def extract_education(text):
-    """Detect education level from text."""
-    text_lower = text.lower()
-
-    education_levels = {
-        'PhD/Doctorate': [
-            'phd', 'doctorate', 'doctoral', 'ph.d'
-        ],
-        'Masters': [
-            'master', 'mtech', 'm.tech', 'mca', 'm.c.a',
-            'mba', 'm.b.a', 'msc', 'm.sc', 'ms '
-        ],
-        'Bachelors': [
-            'btech', 'b.tech', 'bsc', 'b.sc', 'bca',
-            'b.c.a', 'be ', 'b.e.', 'bachelor',
-            'bsc it', 'bsc cs'
-        ],
-        'Diploma': [
-            'diploma', 'polytechnic'
-        ],
-        'Higher Secondary': [
-            '12th', 'hsc', 'higher secondary',
-            'intermediate', '+2'
-        ]
-    }
-
-    detected = []
-    for level, keywords in education_levels.items():
-        for keyword in keywords:
-            if keyword in text_lower:
-                detected.append(level)
-                break
-
-    if detected:
-        priority = [
-            'PhD/Doctorate', 'Masters', 'Bachelors',
-            'Diploma', 'Higher Secondary'
-        ]
-        for level in priority:
-            if level in detected:
-                return level
-
-    return 'Not Detected'
-
-
-# ============================================
-# SECTION 7: MATCHING ENGINE
-# ============================================
-
-def calculate_skill_match(job_skills, resume_skills):
-    """Calculate skill match score."""
-    if not job_skills:
-        return 0, [], []
-
-    job_set = set(s.lower() for s in job_skills)
-    resume_set = set(s.lower() for s in resume_skills)
-
-    matched = job_set & resume_set
-    missing = job_set - resume_set
-
-    if len(job_set) == 0:
-        return 0, [], []
-
-    score = (len(matched) / len(job_set)) * 100
-
-    return round(score), list(matched), list(missing)
-
-
-def calculate_keyword_similarity(job_text, resume_text):
-    """Calculate keyword similarity."""
-    job_words = set(clean_text_logic(job_text).split())
-    resume_words = set(clean_text_logic(resume_text).split())
-
-    stop_words = {
-        'the', 'is', 'a', 'an', 'and', 'or', 'but',
-        'in', 'on', 'at', 'to', 'for', 'of', 'it',
-        'that', 'this', 'are', 'was', 'be', 'have',
-        'with', 'can', 'not', 'they', 'we', 'you',
-        'will', 'should', 'would', 'could', 'may',
-        'must', 'shall', 'do', 'does', 'did', 'has',
-        'had', 'been', 'being', 'having', 'each',
-        'which', 'their', 'there', 'from', 'what',
-        'who', 'how', 'when', 'where', 'why', 'all',
-        'about', 'our', 'your', 'more', 'also',
-        'very', 'just', 'than', 'then', 'into',
-        'some', 'such', 'only', 'other', 'over',
-        'after', 'before', 'between', 'under',
-        'above', 'any', 'both', 'through', 'during',
-        'own', 'same', 'so', 'too', 'no', 'nor',
-        'up', 'out', 'if', 'as', 'by'
-    }
-
-    job_words -= stop_words
-    resume_words -= stop_words
-
-    if not job_words:
-        return 0
-
-    overlap = job_words & resume_words
-    score = (len(overlap) / len(job_words)) * 100
-
-    return round(min(score, 100))
-
-
-def predict_career_paths(resume_skills):
+def predict_career_paths(resume_skills: list) -> list:
     """Predict best career paths based on resume skills."""
     career_scores = []
+    resume_set = set(s.lower() for s in resume_skills)
 
     for career, data in CAREER_PATHS.items():
         required = set(data['required'])
         good_to_have = set(data['good_to_have'])
-        resume_set = set(s.lower() for s in resume_skills)
 
         req_match = len(required & resume_set) / len(required) if required else 0
         good_match = len(good_to_have & resume_set) / len(good_to_have) if good_to_have else 0
 
-        total_score = (req_match * 70) + (good_match * 30)
-
-        matched_required = list(required & resume_set)
-        matched_good = list(good_to_have & resume_set)
-        missing_required = list(required - resume_set)
-        missing_good = list(good_to_have - resume_set)
+        total_score = round((req_match * 70) + (good_match * 30))
 
         career_scores.append({
             'career': career,
-            'score': round(total_score),
-            'description': data['description'],
+            'score': total_score,
             'salary_range': data['salary_range'],
             'demand': data['demand'],
-            'matched_required': matched_required,
-            'matched_good': matched_good,
-            'missing_required': missing_required,
-            'missing_good': missing_good[:5],
-            'total_required': len(required),
-            'total_matched': len(matched_required)
+            'matched_required': sorted(required & resume_set),
+            'missing_required': sorted(required - resume_set),
         })
 
     career_scores.sort(key=lambda x: x['score'], reverse=True)
     return career_scores
 
 
-def generate_learning_path(missing_skills):
-    """Generate learning path for missing skills."""
+def generate_learning_path(missing_skills: list) -> list:
+    """Generate prioritized learning roadmap."""
     priority_map = {
         'python': 1, 'sql': 1, 'git': 1,
         'html': 1, 'css': 1, 'javascript': 1,
@@ -442,41 +245,32 @@ def generate_learning_path(missing_skills):
         'docker': 3, 'aws': 3, 'kubernetes': 3,
         'ci/cd': 3, 'terraform': 3,
         'machine learning': 3, 'deep learning': 3,
-        'microservices': 3, 'system design': 3
+        'microservices': 3, 'system design': 3,
     }
 
-    prioritized = []
-    for skill in missing_skills:
-        priority = priority_map.get(skill, 4)
-        time_estimate = {
-            1: '1-2 weeks',
-            2: '2-4 weeks',
-            3: '1-2 months',
-            4: '2-4 weeks'
-        }.get(priority, '2-4 weeks')
+    time_map = {1: '1-2 weeks', 2: '2-4 weeks', 3: '1-2 months', 4: '2-4 weeks'}
+    label_map = {1: 'Learn First', 2: 'Learn Next', 3: 'Learn Later', 4: 'Optional'}
 
-        prioritized.append({
+    result = []
+    for skill in missing_skills:
+        p = priority_map.get(skill, 4)
+        result.append({
             'skill': skill,
-            'priority': priority,
-            'time': time_estimate,
-            'priority_label': {
-                1: 'Learn First',
-                2: 'Learn Next',
-                3: 'Learn Later',
-                4: 'Optional'
-            }.get(priority, 'Optional')
+            'priority': p,
+            'time': time_map.get(p, '2-4 weeks'),
+            'priority_label': label_map.get(p, 'Optional'),
         })
 
-    prioritized.sort(key=lambda x: x['priority'])
-    return prioritized[:10]
+    result.sort(key=lambda x: x['priority'])
+    return result[:10]
 
 
 def generate_summary(
-    match_score, skill_score, keyword_score,
+    match_score, skill_score, cosine_percent,
     matched_skills, missing_skills,
-    experience, education, top_career, predicted_category
+    experience, education, top_career, prediction
 ):
-    """Generate summary report."""
+    """Generate executive summary."""
     if match_score >= 75:
         assessment = "EXCELLENT FIT"
         recommendation = (
@@ -506,36 +300,128 @@ def generate_summary(
     if len(matched_skills) >= 3:
         strengths.append(f"Has {len(matched_skills)} matching technical skills")
     if experience >= 0 and experience <= 2:
-        strengths.append("Experience level is suitable for fresher/junior roles")
+        strengths.append("Experience level suitable for fresher/junior roles")
     if education in ['Bachelors', 'Masters', 'PhD/Doctorate']:
-        strengths.append(f"Education qualification detected: {education}")
+        strengths.append(f"Education: {education}")
+    if cosine_percent >= 40:
+        strengths.append(f"High semantic similarity ({cosine_percent}%) with job description")
     if skill_score >= 60:
-        strengths.append("Strong skill alignment with the job description")
-    if predicted_category not in ["ML Model Not Loaded", "Prediction Error"]:
-        strengths.append(f"ML model predicts candidate category as: {predicted_category}")
+        strengths.append("Strong skill alignment with requirements")
+    if prediction['category'] not in ["ML Model Not Loaded", "Prediction Error"]:
+        strengths.append(
+            f"ML prediction: {prediction['category']} "
+            f"({prediction['confidence_percent']}% confidence)"
+        )
 
     concerns = []
     if len(missing_skills) > 3:
         concerns.append(f"Missing {len(missing_skills)} required or preferred skills")
     if experience == -1:
-        concerns.append("Experience level not clearly detected from resume")
+        concerns.append("Experience level not clearly detected")
     if skill_score < 40:
-        concerns.append("Skill match is below the recommended level")
+        concerns.append("Skill match below recommended level")
     if education == 'Not Detected':
-        concerns.append("Education details are unclear or missing")
+        concerns.append("Education details unclear or missing")
+    if cosine_percent < 20:
+        concerns.append("Low semantic overlap with job description")
 
     return {
         'assessment': assessment,
         'recommendation': recommendation,
         'strengths': strengths if strengths else ['Resume submitted for analysis'],
         'concerns': concerns if concerns else ['No major concerns identified'],
-        'top_career': top_career
+        'top_career': top_career,
     }
 
 
-# ============================================
-# SECTION 8: FLASK ROUTE
-# ============================================
+def run_full_analysis(job_description: str, resume_text: str) -> dict:
+    """
+    Core analysis pipeline. Used by BOTH web UI and REST API.
+    """
+    # 1. Skill extraction
+    job_skills_by_cat, job_skills_flat = extract_skills(job_description)
+    resume_skills_by_cat, resume_skills_flat = extract_skills(resume_text)
+
+    # 2. Skill match
+    skill_score, matched_skills, missing_skills, extra_skills = calculate_skill_match(
+        job_skills_flat, resume_skills_flat
+    )
+
+    # 3. Semantic similarity
+    similarity = similarity_engine.compute_similarity(job_description, resume_text)
+
+    # 4. Experience matching (NEW)
+    resume_experience = extract_experience(resume_text)
+    jd_experience = extract_experience_from_jd(job_description)
+    experience_match = calculate_experience_score(resume_experience, jd_experience)
+
+    # 5. Education
+    education = extract_education(resume_text)
+
+    # 6. Composite score (now includes experience)
+    match_score, match_level = calculate_composite_score(
+        skill_score,
+        similarity['cosine_percent'],
+        experience_match['score'],
+    )
+
+    # 7. ML prediction
+    prediction = predict_resume_category(resume_text)
+
+    # 8. Career paths
+    career_paths = predict_career_paths(resume_skills_flat)
+    top_career = career_paths[0] if career_paths else None
+
+    # 9. Salary estimation (NEW)
+    salary = estimate_salary_range(
+        resume_experience if resume_experience >= 0 else 0,
+        matched_skills,
+        education,
+        top_career['career'] if top_career else ''
+    )
+
+    # 10. Learning path
+    learning_path = generate_learning_path(missing_skills)
+
+    # 11. Summary
+    summary = generate_summary(
+        match_score, skill_score, similarity['cosine_percent'],
+        matched_skills, missing_skills,
+        resume_experience, education, top_career, prediction
+    )
+
+    return {
+        'match_score': match_score,
+        'match_level': match_level,
+        'skill_score': skill_score,
+        'keyword_score': similarity['cosine_percent'],
+        'cosine_similarity': similarity['cosine_similarity'],
+        'cosine_percent': similarity['cosine_percent'],
+        'similarity_method': similarity['method'],
+        'shared_terms': similarity['shared_important_terms'],
+        'job_distinctive_terms': similarity['job_distinctive_terms'],
+        'resume_distinctive_terms': similarity['resume_distinctive_terms'],
+        'matched_skills': matched_skills,
+        'missing_skills': missing_skills,
+        'extra_skills': extra_skills,
+        'resume_skills': resume_skills_by_cat,
+        'job_skills': job_skills_flat,
+        'total_job_skills': len(job_skills_flat),
+        'total_matched': len(matched_skills),
+        'career_paths': career_paths[:3],
+        'learning_path': learning_path,
+        'experience': resume_experience,
+        'experience_match': experience_match,
+        'education': education,
+        'salary': salary,
+        'prediction': prediction,
+        'summary': summary,
+        'model_metrics': model_metrics,
+    }
+
+# ============================================================
+# WEB ROUTES
+# ============================================================
 
 @app.route('/', methods=['GET', 'POST'])
 def home():
@@ -544,10 +430,7 @@ def home():
         resume_text = request.form.get('resume', '').strip()
 
         if not resume_text:
-            return render_template(
-                'index.html',
-                error="Please paste your resume text."
-            )
+            return render_template('index.html', error="Please paste your resume text.")
 
         if not job_description:
             return render_template(
@@ -556,87 +439,96 @@ def home():
                 resume_text=resume_text
             )
 
-        resume_words = len(resume_text.split())
-        if resume_words < 30:
+        if len(resume_text.split()) < 30:
             return render_template(
                 'index.html',
-                error=f"Resume too short ({resume_words} words). Paste complete resume (minimum 30 words).",
+                error=f"Resume too short ({len(resume_text.split())} words). Minimum 30.",
                 resume_text=resume_text,
                 job_description=job_description
             )
 
-        job_words = len(job_description.split())
-        if job_words < 10:
+        if len(job_description.split()) < 10:
             return render_template(
                 'index.html',
-                error=f"Job description too short ({job_words} words). Paste complete job description.",
+                error=f"Job description too short ({len(job_description.split())} words). Minimum 10.",
                 resume_text=resume_text,
                 job_description=job_description
             )
 
-        # ML category prediction
-        predicted_category = predict_resume_category(resume_text)
-
-        # Rule-based analysis
-        job_skills_by_cat, job_skills_flat = extract_skills(job_description)
-        resume_skills_by_cat, resume_skills_flat = extract_skills(resume_text)
-
-        skill_score, matched_skills, missing_skills = calculate_skill_match(
-            job_skills_flat, resume_skills_flat
-        )
-        keyword_score = calculate_keyword_similarity(job_description, resume_text)
-
-        match_score = round((skill_score * 0.6) + (keyword_score * 0.4))
-
-        experience = extract_experience(resume_text)
-        education = extract_education(resume_text)
-
-        career_paths = predict_career_paths(resume_skills_flat)
-        top_career = career_paths[0] if career_paths else None
-
-        learning_path = generate_learning_path(missing_skills)
-
-        extra_skills = list(set(resume_skills_flat) - set(job_skills_flat))
-
-        summary = generate_summary(
-            match_score, skill_score, keyword_score,
-            matched_skills, missing_skills,
-            experience, education, top_career, predicted_category
-        )
-
-        if match_score >= 75:
-            match_level = 'strong'
-        elif match_score >= 50:
-            match_level = 'good'
-        elif match_score >= 30:
-            match_level = 'partial'
-        else:
-            match_level = 'weak'
-
-        return render_template(
-            'index.html',
-            match_score=match_score,
-            skill_score=skill_score,
-            keyword_score=keyword_score,
-            match_level=match_level,
-            matched_skills=matched_skills,
-            missing_skills=missing_skills,
-            extra_skills=extra_skills,
-            resume_skills=resume_skills_by_cat,
-            job_skills=job_skills_flat,
-            total_job_skills=len(job_skills_flat),
-            total_matched=len(matched_skills),
-            career_paths=career_paths[:3],
-            learning_path=learning_path,
-            experience=experience,
-            education=education,
-            summary=summary,
-            predicted_category=predicted_category,
-            resume_text=resume_text,
-            job_description=job_description
-        )
+        try:
+            result = run_full_analysis(job_description, resume_text)
+            return render_template(
+                'index.html',
+                resume_text=resume_text,
+                job_description=job_description,
+                **result
+            )
+        except Exception as e:
+            logger.error(f"Analysis failed: {e}", exc_info=True)
+            return render_template(
+                'index.html',
+                error=f"Analysis error: {str(e)}",
+                resume_text=resume_text,
+                job_description=job_description
+            )
 
     return render_template('index.html')
+
+
+# ============================================================
+# REST API
+# ============================================================
+
+@app.route('/api/v1/match', methods=['POST'])
+def api_match():
+    """
+    Headless JSON API for resume-job matching.
+
+    Request:
+        POST /api/v1/match
+        Content-Type: application/json
+        {
+            "job_description": "...",
+            "resume": "..."
+        }
+
+    Response:
+        200: Full analysis as JSON
+        400: Validation error
+    """
+    if not request.is_json:
+        return jsonify({'error': 'Content-Type must be application/json', 'status': 400}), 400
+
+    data = request.get_json()
+    job_desc = data.get('job_description', '').strip()
+    resume = data.get('resume', '').strip()
+
+    if not job_desc or not resume:
+        return jsonify({
+            'error': 'Both job_description and resume are required',
+            'status': 400
+        }), 400
+
+    if len(resume.split()) < 10:
+        return jsonify({'error': 'Resume must be at least 10 words', 'status': 400}), 400
+
+    try:
+        result = run_full_analysis(job_desc, resume)
+        return jsonify({'status': 200, 'data': result})
+    except Exception as e:
+        logger.error(f"API error: {e}", exc_info=True)
+        return jsonify({'error': str(e), 'status': 500}), 500
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check for monitoring."""
+    return jsonify({
+        'status': 'healthy',
+        'service': 'resume-screener',
+        'ml_model': 'loaded' if model else 'not loaded',
+        'model_accuracy': model_metrics.get('accuracy', 'N/A'),
+    })
 
 
 if __name__ == '__main__':

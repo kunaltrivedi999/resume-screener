@@ -1,0 +1,57 @@
+{
+  "accuracy": 100.0,
+  "baseline_accuracy": 3.58,
+  "improvement_over_baseline": 96.42,
+  "model_type": "Naive Bayes",
+  "total_samples": 9544,
+  "num_categories": 28,
+  "vocabulary_size": 3000,
+  "categories": [
+    "AI Engineer",
+    "Asst. Manager/ Manger (Administrative)",
+    "Business Development Executive",
+    "Civil Engineer",
+    "Data Engineer",
+    "Data Science Engineer",
+    "Database Administrator (DBA)",
+    "DevOps Engineer",
+    "Executive - VAT",
+    "Executive/ Senior Executive- Trade Marketing, Hygiene Products",
+    "Executive/ Sr. Executive -IT",
+    "Full Stack Developer (Python,React js)",
+    "HR Officer",
+    "Head of Internal Control & Compliance (ICC) - SEVP/DMD",
+    "Intern (Generative AI Engineering - 2D/3D Image Generation)",
+    "Machine Learning (ML) Engineer",
+    "Management Trainee - Mechanical",
+    "Manager- Human Resource Management (HRM)",
+    "Marketing Officer",
+    "Mechanical Designer",
+    "Mechanical Engineer",
+    "Network Support Engineer",
+    "Project Coordinator (Civil)",
+    "Senior Software Engineer",
+    "Senior iOS Engineer",
+    "Site Engineer",
+    "Sr.Officer / Executive - Internal Audit",
+    "System Administrator (Operation & Maintenance of Server, Storage & Service Desk System)"
+  ],
+  "model_comparison": {
+    "Naive Bayes": {
+      "accuracy": 100.0,
+      "train_time": 0.022
+    },
+    "Logistic Regression": {
+      "accuracy": 100.0,
+      "train_time": 0.492
+    },
+    "Linear SVM": {
+      "accuracy": 100.0,
+      "train_time": 0.349
+    }
+  },
+  "precision_macro": 100.0,
+  "recall_macro": 100.0,
+  "f1_macro": 100.0,
+  "trained_at": "2026-03-30T17:11:16.021654"
+}

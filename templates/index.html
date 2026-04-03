@@ -599,219 +599,207 @@
                     {% endif %}
                 </div>
 
-                <p class="score-subtext">
-                    {{ total_matched }}/{{ total_job_skills }} required skills matched
-                </p>
-
-                <div class="score-breakdown">
-                    <div class="score-item">
-                        <div class="label">Skill Match Score</div>
-                        <div class="value">{{ skill_score }}%</div>
-                        <div class="progress-bar">
-                            <div class="progress-fill green" style="width: {{ skill_score }}%;"></div>
-                        </div>
-                    </div>
-
-                    <div class="score-item">
-                        <div class="label">Keyword Relevance</div>
-                        <div class="value">{{ keyword_score }}%</div>
-                        <div class="progress-bar">
-                            <div class="progress-fill blue" style="width: {{ keyword_score }}%;"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+               <p class="score-subtext">
+    {{ total_matched }}/{{ total_job_skills }} skills · 
+    {{ cosine_percent }}% semantic match · 
+    {{ experience_match.verdict }} ·
+    {{ salary.salary_range }}
+</p>
+                <div class="score-breakdown" style="grid-template-columns: 1fr 1fr 1fr;">
+    <div class="score-item">
+        <div class="label">Skill Match (40%)</div>
+        <div class="value">{{ skill_score }}%</div>
+        <div class="progress-bar">
+            <div class="progress-fill green" style="width: {{ skill_score }}%;"></div>
+        </div>
+    </div>
+    <div class="score-item">
+        <div class="label">Semantic Similarity (30%)</div>
+        <div class="value">{{ cosine_percent }}%</div>
+        <div class="progress-bar">
+            <div class="progress-fill blue" style="width: {{ cosine_percent }}%;"></div>
+        </div>
+    </div>
+    <div class="score-item">
+        <div class="label">Experience Fit (30%)</div>
+        <div class="value">{{ experience_match.score }}%</div>
+        <div class="progress-bar">
+            <div class="progress-fill {% if experience_match.score >= 70 %}green{% else %}blue{% endif %}" 
+                 style="width: {{ experience_match.score }}%;"></div>
+        </div>
+    </div>
+</div>
 <div class="card">
     <h3>Machine Learning Prediction</h3>
     <div class="info-grid">
         <div class="info-item">
             <div class="info-label">Predicted Category</div>
-            <div class="info-value">{{ predicted_category }}</div>
+            <div class="info-value">{{ prediction.category }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Confidence</div>
+            <div class="info-value">{{ prediction.confidence_percent }}%</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Model Accuracy</div>
+            <div class="info-value">{{ prediction.model_accuracy }}%</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Model Type</div>
+            <div class="info-value">{{ model_metrics.get('model_type', 'Naive Bayes') }}</div>
+        </div>
+    </div>
+    {% if prediction.top_3 %}
+    <div style="margin-top: 14px;">
+        <div class="info-item" style="padding: 12px;">
+            <div class="info-label">Top 3 Predictions</div>
+            {% for pred in prediction.top_3 %}
+            <div style="display: flex; justify-content: space-between; padding: 4px 0; font-size: 0.88rem;">
+                <span style="font-weight: 600; color: #0f172a;">{{ pred.category }}</span>
+                <span style="color: #6b7280;">{{ pred.confidence }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% if shared_terms %}
+<div class="card">
+    <h3>Semantic Analysis (TF-IDF)</h3>
+    <p style="color: #64748b; font-size: 0.88rem; margin-bottom: 14px;">
+        Cosine Similarity: <strong style="color: #0f172a;">{{ cosine_similarity }}</strong>
+        ({{ cosine_percent }}% semantic overlap between documents)
+    </p>
+
+    {% if shared_terms %}
+    <div class="skills-category">
+        <div class="skills-category-name">SHARED IMPORTANT TERMS</div>
+        <div class="skill-tags">
+            {% for term in shared_terms %}
+            <span class="skill-tag matched">{{ term }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if job_distinctive_terms %}
+    <div class="skills-category">
+        <div class="skills-category-name">IN JOB DESCRIPTION ONLY</div>
+        <div class="skill-tags">
+            {% for term in job_distinctive_terms %}
+            <span class="skill-tag missing">{{ term }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if resume_distinctive_terms %}
+    <div class="skills-category">
+        <div class="skills-category-name">IN RESUME ONLY</div>
+        <div class="skill-tags">
+            {% for term in resume_distinctive_terms %}
+            <span class="skill-tag extra">{{ term }}</span>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+<div class="card">
+    <h3>Candidate Overview</h3>
+    <div class="info-grid">
+        <div class="info-item">
+            <div class="info-label">Experience</div>
+            <div class="info-value">
+                {% if experience == -1 %}
+                    Not Detected
+                {% elif experience == 0 %}
+                    Fresher
+                {% else %}
+                    {{ experience }} year{{ 's' if experience > 1 else '' }}
+                {% endif %}
+            </div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Education</div>
+            <div class="info-value">{{ education }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Experience Fit</div>
+            <div class="info-value" style="color: {% if experience_match.score >= 80 %}#16a34a{% elif experience_match.score >= 50 %}#d97706{% else %}#dc2626{% endif %};">
+                {{ experience_match.verdict }}
+            </div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Required Experience</div>
+            <div class="info-value">{{ experience_match.required_range }}</div>
+        </div>
+    </div>
+    
+    {% if experience_match.details %}
+    <div style="margin-top: 14px; padding: 12px; background: #f8fafc; border-radius: 8px; font-size: 0.88rem; color: #374151;">
+        {{ experience_match.details }}
+    </div>
+    {% endif %}
+
+<div class="card">
+    <h3>How This Score Was Calculated</h3>
+    <div style="background: #f8fafc; border-radius: 12px; padding: 18px; margin-bottom: 14px; font-family: 'Courier New', monospace; font-size: 0.88rem; color: #334155; line-height: 2;">
+        <div><strong>Final Score</strong> = (Skills × 40%) + (Semantic × 30%) + (Experience × 30%)</div>
+        <div style="color: #6b7280; margin-top: 8px;">
+            = ({{ skill_score }}% × 0.40) + ({{ cosine_percent }}% × 0.30) + ({{ experience_match.score }}% × 0.30)
+        </div>
+        <div style="color: #6b7280;">
+            = {{ (skill_score * 0.40)|round(1) }} + {{ (cosine_percent * 0.30)|round(1) }} + {{ (experience_match.score * 0.30)|round(1) }}
+        </div>
+        <div style="color: #0f172a; font-weight: 700; margin-top: 4px;">
+            = {{ match_score }}%
         </div>
     </div>
 </div>
-            <div class="card">
-                <h3>Candidate Overview</h3>
-                <div class="info-grid">
-                    <div class="info-item">
-                        <div class="info-label">Experience</div>
-                        <div class="info-value">
-                            {% if experience == -1 %}
-                                Not Detected
-                            {% elif experience == 0 %}
-                                Fresher
-                            {% else %}
-                                {{ experience }} year{{ 's' if experience > 1 else '' }}
-                            {% endif %}
-                        </div>
-                    </div>
 
-                    <div class="info-item">
-                        <div class="info-label">Education</div>
-                        <div class="info-value">{{ education }}</div>
-                    </div>
-                </div>
-            </div>
-
-            {% if matched_skills %}
-            <div class="card">
-                <h3>Core Matching Skills ({{ matched_skills|length }})</h3>
-                <div class="skill-tags">
-                    {% for skill in matched_skills %}
-                    <span class="skill-tag matched">{{ skill }}</span>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
-
-            {% if missing_skills %}
-            <div class="card">
-                <h3>Skill Gaps ({{ missing_skills|length }})</h3>
-                <div class="skill-tags">
-                    {% for skill in missing_skills %}
-                    <span class="skill-tag missing">{{ skill }}</span>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
-
-            {% if extra_skills %}
-            <div class="card">
-                <h3>Additional Competencies</h3>
-                <div class="skill-tags">
-                    {% for skill in extra_skills %}
-                    <span class="skill-tag extra">{{ skill }}</span>
-                    {% endfor %}
-                </div>
-            </div>
-            {% endif %}
-
-            {% if resume_skills %}
-            <div class="card">
-                <h3>Complete Skill Profile</h3>
-                {% for category, skills in resume_skills.items() %}
-                <div class="skills-category">
-                    <div class="skills-category-name">
-                        {{ category|replace('_', ' ') }}
-                    </div>
-                    <div class="skill-tags">
-                        {% for skill in skills %}
-                        <span class="skill-tag extra">{{ skill }}</span>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            {% if career_paths %}
-            <div class="card">
-                <h3>Career Alignment Insights</h3>
-                {% for career in career_paths %}
-                <div class="career-card">
-                    <div class="career-header">
-                        <span class="career-name">
-                            {% if loop.index == 1 %}
-                                #1
-                            {% elif loop.index == 2 %}
-                                #2
-                            {% else %}
-                                #3
-                            {% endif %}
-                            {{ career.career }}
-                        </span>
-                        <span class="career-score">{{ career.score }}% match</span>
-                    </div>
-
-                    <div class="career-meta">
-                        <span>{{ career.salary_range }}</span>
-                        <span>Demand: {{ career.demand }}</span>
-                    </div>
-
-                    <div class="career-skills">
-                        <strong>You have:</strong>
-                        {{ career.matched_required|join(', ') or 'None yet' }}
-                        <br>
-                        <strong>You need:</strong>
-                        {{ career.missing_required|join(', ') or 'All covered!' }}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            {% if learning_path %}
-            <div class="card">
-                <h3>Skill Development Roadmap</h3>
-                {% for item in learning_path %}
-                <div class="learning-item">
-                    <span class="learning-priority p{{ item.priority }}">
-                        {{ item.priority_label }}
-                    </span>
-                    <span class="learning-skill">{{ item.skill|title }}</span>
-                    <span class="learning-time">{{ item.time }}</span>
-                </div>
-                {% endfor %}
-            </div>
-            {% endif %}
-
-            {% if summary %}
-            <div class="card summary-card {{ match_level }}">
-                <h3>Executive Summary</h3>
-
-                <div class="summary-assessment"
-                    style="color:
-                    {% if match_level == 'strong' %}
-                        #16a34a
-                    {% elif match_level == 'good' %}
-                        #2563eb
-                    {% elif match_level == 'partial' %}
-                        #d97706
-                    {% else %}
-                        #dc2626
-                    {% endif %};">
-                    {{ summary.assessment }}
-                </div>
-
-                <div class="summary-recommendation">
-                    {{ summary.recommendation }}
-                </div>
-
-                <strong style="color: #0f172a;">Strengths:</strong>
-                <ul class="summary-list">
-                    {% for s in summary.strengths %}
-                    <li class="strength">{{ s }}</li>
-                    {% endfor %}
-                </ul>
-
-                <br>
-
-                <strong style="color: #0f172a;">Areas for Improvement:</strong>
-                <ul class="summary-list">
-                    {% for c in summary.concerns %}
-                    <li class="concern">{{ c }}</li>
-                    {% endfor %}
-                </ul>
-
-                {% if summary.top_career %}
-                <br>
-                <p style="color: #64748b; font-weight: 500;">
-                    <strong style="color: #0f172a;">Best aligned role:</strong>
-                    {{ summary.top_career.career }} ({{ summary.top_career.score }}% fit)
-                </p>
-                {% endif %}
-            </div>
-            {% endif %}
-
+    <!-- Experience Score Bar -->
+    <div style="margin-top: 14px;">
+        <div style="display: flex; justify-content: space-between; font-size: 0.82rem; margin-bottom: 4px;">
+            <span style="color: #6b7280; font-weight: 600;">Experience Match Score</span>
+            <span style="font-weight: 800; color: #0f172a;">{{ experience_match.score }}%</span>
         </div>
-        {% endif %}
-
-        <div class="footer">
-            <p>
-                Built by Kunal •
-                <a href="#">GitHub</a>
-            </p>
+        <div class="progress-bar">
+            <div class="progress-fill {% if experience_match.score >= 70 %}green{% else %}blue{% endif %}" 
+                 style="width: {{ experience_match.score }}%;"></div>
         </div>
     </div>
-</body>
+</div>
+
+<!-- Salary Estimation Card (NEW) -->
+{% if salary %}
+<div class="card">
+    <h3>💰 Salary Estimation</h3>
+    <div class="info-grid">
+        <div class="info-item">
+            <div class="info-label">Experience Level</div>
+            <div class="info-value">{{ salary.level }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Estimated Monthly</div>
+            <div class="info-value" style="color: #16a34a;">{{ salary.salary_range }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Estimated Annual</div>
+            <div class="info-value" style="color: #2563eb;">{{ salary.salary_annual }}</div>
+        </div>
+        <div class="info-item">
+            <div class="info-label">Market Adjustments</div>
+            <div class="info-value" style="font-size: 0.85rem;">
+                Skills {{ salary.multipliers.skill_boost }} · 
+                Education {{ salary.multipliers.education_boost }} · 
+                Career {{ salary.multipliers.career_boost }}
+            </div>
+        </div>
+    </div>
+    <div style="margin-top: 12px; padding: 10px; background: #fffbeb; border-radius: 8px; border-left: 3px solid #f59e0b; font-size: 0.82rem; color: #92400e;">
+        Estimates based on Mumbai market data for {{ salary.level }} level roles. Actual salary varies by company size, funding stage, and negotiation.
+    </div>
+</div>
+{% endif %} {% endif %} </body>
 </html>
