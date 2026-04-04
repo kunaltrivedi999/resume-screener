@@ -180,10 +180,8 @@ def calculate_skill_match(
     resume_skills: List[str]
 ) -> Tuple[int, List[str], List[str], List[str]]:
     """
-    Calculate skill overlap between job requirements and resume.
-
-    Returns:
-        (score_0_to_100, matched_list, missing_list, extra_list)
+    Calculate skill overlap between job requirements and resume,
+    with a strict penalty for missing required skills.
     """
     if not job_skills:
         return 0, [], [], list(resume_skills)
@@ -195,10 +193,21 @@ def calculate_skill_match(
     missing = sorted(job_set - resume_set)
     extra = sorted(resume_set - job_set)
 
-    score = round((len(matched) / len(job_set)) * 100) if job_set else 0
+    # STRICT SCORING LOGIC
+    if not job_set:
+        return 0, matched, missing, extra
+        
+    base_score = (len(matched) / len(job_set)) * 100
+    
+    # Penalty: Lose 5% for every missing skill required by the JD
+    penalty = len(missing) * 5
+    
+    final_score = round(base_score - penalty)
+    
+    # Ensure score stays between 0 and 100
+    final_score = max(0, min(100, final_score))
 
-    return score, matched, missing, extra
-
+    return final_score, matched, missing, extra
 
 # ============================================================
 # SECTION 2: TF-IDF COSINE SIMILARITY (The Math Upgrade)
@@ -282,10 +291,21 @@ class SimilarityEngine:
         return max(0.0, min(1.0, score))
 
     def _get_terms(self, text_a: str, text_b: str) -> dict:
+        from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
+        
+        # Ban these useless words from showing up in the UI
+        custom_junk = [
+            'using', 'applications', 'performance', 'js', 'centric', 
+            'ability', 'improve', 'building', 'user', 'clean', 'code', 
+            'skills', 'mumbai', 'years', 'experience', 'working', 
+            'knowledge', 'good', 'excellent', 'strong', 'required'
+        ]
+        all_stop_words = list(ENGLISH_STOP_WORDS) + custom_junk
+
         try:
             analyzer = TfidfVectorizer(
                 max_features=3000,
-                stop_words='english',
+                stop_words=all_stop_words,
                 ngram_range=(1, 2),
                 sublinear_tf=True,
             )
@@ -317,14 +337,6 @@ class SimilarityEngine:
             }
         except Exception:
             return {'shared': [], 'job_only': [], 'resume_only': []}
-
-    def _clean(self, text: str) -> str:
-        text = str(text).lower()
-        text = re.sub(r'[^a-z0-9\s]', ' ', text)
-        text = re.sub(r'\s+', ' ', text).strip()
-        return text
-
-
 # ============================================================
 # SECTION 3: COMPOSITE SCORING
 # ============================================================

@@ -350,7 +350,7 @@ def run_full_analysis(job_description: str, resume_text: str) -> dict:
     # 3. Semantic similarity
     similarity = similarity_engine.compute_similarity(job_description, resume_text)
 
-    # 4. Experience matching (NEW)
+    # 4. Experience matching
     resume_experience = extract_experience(resume_text)
     jd_experience = extract_experience_from_jd(job_description)
     experience_match = calculate_experience_score(resume_experience, jd_experience)
@@ -358,12 +358,23 @@ def run_full_analysis(job_description: str, resume_text: str) -> dict:
     # 5. Education
     education = extract_education(resume_text)
 
-    # 6. Composite score (now includes experience)
-    match_score, match_level = calculate_composite_score(
-        skill_score,
-        similarity['cosine_percent'],
-        experience_match['score'],
+    # 6. Composite score (STRICT WEIGHTING)
+    # Give the Skill Score priority since it now has the penalty applied
+    match_score = round(
+        (skill_score * 0.40) +
+        (similarity['cosine_percent'] * 0.30) +
+        (experience_match['score'] * 0.30)
     )
+    match_score = max(0, min(100, match_score))
+
+    if match_score >= 75:
+        match_level = 'strong'
+    elif match_score >= 50:
+        match_level = 'good'
+    elif match_score >= 30:
+        match_level = 'partial'
+    else:
+        match_level = 'weak'
 
     # 7. ML prediction
     prediction = predict_resume_category(resume_text)
@@ -372,7 +383,7 @@ def run_full_analysis(job_description: str, resume_text: str) -> dict:
     career_paths = predict_career_paths(resume_skills_flat)
     top_career = career_paths[0] if career_paths else None
 
-    # 9. Salary estimation (NEW)
+    # 9. Salary estimation
     salary = estimate_salary_range(
         resume_experience if resume_experience >= 0 else 0,
         matched_skills,

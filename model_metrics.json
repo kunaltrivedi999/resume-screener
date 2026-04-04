@@ -1,5 +1,6 @@
 {
   "accuracy": 100.0,
+  "accuracy_test": 100.0,
   "baseline_accuracy": 3.58,
   "improvement_over_baseline": 96.42,
   "model_type": "Naive Bayes",
@@ -38,20 +39,26 @@
   ],
   "model_comparison": {
     "Naive Bayes": {
-      "accuracy": 100.0,
-      "train_time": 0.022
+      "accuracy_test": 100.0,
+      "accuracy_cv": 100.0,
+      "accuracy_cv_std": 0.0,
+      "train_time": 0.166
     },
     "Logistic Regression": {
-      "accuracy": 100.0,
-      "train_time": 0.492
+      "accuracy_test": 100.0,
+      "accuracy_cv": 100.0,
+      "accuracy_cv_std": 0.0,
+      "train_time": 2.483
     },
     "Linear SVM": {
-      "accuracy": 100.0,
-      "train_time": 0.349
+      "accuracy_test": 100.0,
+      "accuracy_cv": 100.0,
+      "accuracy_cv_std": 0.0,
+      "train_time": 2.407
     }
   },
   "precision_macro": 100.0,
   "recall_macro": 100.0,
   "f1_macro": 100.0,
-  "trained_at": "2026-03-30T17:11:16.021654"
+  "trained_at": "2026-04-03T21:09:23.996467"
 }

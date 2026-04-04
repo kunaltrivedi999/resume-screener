@@ -1,5 +1,3 @@
-# File: ml_pipeline.py
-
 import json
 import os
 import re
